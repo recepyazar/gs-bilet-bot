@@ -1,0 +1,9 @@
+services:
+  gsbot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/gsbot.db
+    volumes:
+      - ./data:/app/data
