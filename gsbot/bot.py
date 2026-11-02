@@ -39,7 +39,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import site
+from . import news, site
 from . import storage as st
 from . import validators as v
 from .config import Config
@@ -79,7 +79,7 @@ HELP_TEXT = (
     "/iptal — yarım kalan işlemi iptal et"
 )
 
-ADMIN_HELP = "\n\n<b>Yönetici</b>\n/davet [adet] — davet linki üret\n/kullanicilar — kullanıcı listesi\n/kontrol — maçları şimdi kontrol et"
+ADMIN_HELP = "\n\n<b>Yönetici</b>\n/davet [adet] — davet linki üret\n/kullanicilar — kullanıcı listesi\n/kontrol — maçları şimdi kontrol et\n/duyuru — duyuruları şimdi kontrol et"
 
 STATUS_LABELS = {
     st.ASKED: "🙋 onay bekliyor",
@@ -89,6 +89,9 @@ STATUS_LABELS = {
     st.FAILED: "❌ hata",
     st.SKIPPED: "⏭ atlandı",
     st.EXPIRED: "⌛ süre doldu",
+    st.CLOSED: "📋 liste çıktı, başvurulmadı",
+    st.WON: "🎉 listede!",
+    st.LOST: "😔 listede yok",
 }
 
 
@@ -112,6 +115,8 @@ class Runtime:
     last_check_at: float | None = None
     last_fixtures: list = field(default_factory=list)
     check_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    news_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_news_check_at: float | None = None
 
 
 def rt(context: ContextTypes.DEFAULT_TYPE) -> Runtime:
@@ -553,6 +558,8 @@ def status_text(r: Runtime, chat_id: int) -> str:
     lines = [f"{health} <b>Bot çalışıyor</b>", f"Son başarılı kontrol: {check}"]
     if r.fetch_failures:
         lines.append(f"⚠️ Site son {r.fetch_failures} denemede yanıt vermedi")
+    if r.last_news_check_at is not None:
+        lines.append(f"Son duyuru kontrolü: {ago(now - r.last_news_check_at)} önce")
     if r.last_fixtures:
         lines.append("\n<b>Açık maçlar</b>")
         lines += [fixture_line(fx) for fx in r.last_fixtures]
@@ -699,7 +706,7 @@ async def run_check(app: Application) -> int | None:
         r.last_check_at = time.time()
         r.last_fixtures = fixtures
 
-        plan = st.plan_notifications(r.store.active_users(), fixtures, r.store.application_keys())
+        plan = st.plan_notifications(r.store.active_users(), fixtures, r.store.application_keys(), r.store.closed_keys())
         if plan:
             log.info("%d bildirim (%d açık maç)", len(plan), len(fixtures))
         for user, fx in plan:
@@ -721,6 +728,115 @@ async def run_check(app: Application) -> int | None:
                     ]]),
                 )
         return len(fixtures)
+
+
+# ==========================================================================
+# Duyurular: "gazi ve engelli taraftar bilet listesi"
+# ==========================================================================
+
+async def news_job(context: ContextTypes.DEFAULT_TYPE):
+    await run_news_check(context.application)
+
+
+async def run_news_check(app: Application) -> list | None:
+    """Yeni duyuruları bulur, liste olanları işler. İşlenen duyuruları (hata ise None) döndürür."""
+    r: Runtime = app.bot_data["rt"]
+    async with r.news_lock:
+        cursor = int(r.store.get_kv("news_cursor") or r.config.news_start_id)
+        try:
+            articles, new_cursor = await asyncio.to_thread(news.fetch_new_articles, cursor)
+        except Exception as e:
+            log.warning("Duyurular çekilemedi: %s", e)
+            return None
+        r.last_news_check_at = time.time()
+        for article in articles:
+            if not r.store.news_processed(article.id):
+                if article.is_winner_list:
+                    await handle_winner_list(app, article)
+                r.store.mark_news(article.id, article.title, article.is_winner_list)
+        if new_cursor != cursor:
+            r.store.set_kv("news_cursor", str(new_cursor))
+        return articles
+
+
+async def handle_winner_list(app: Application, article: news.Article):
+    r: Runtime = app.bot_data["rt"]
+    names = news.list_names(article)
+    log.info("Liste duyurusu %d: %d isim", article.id, len(names))
+
+    # Hangi maç(lar)a ait? Açık maçlar + daha önce bildirilmiş maçlar
+    candidates = {site.fixture_key(f): f for f in [*r.store.known_fixtures(), *r.last_fixtures]}
+    matched = {k: f for k, f in candidates.items() if news.fixture_matches(article, f["text"])}
+
+    # Bu maçlar artık kapalı: form açık olsa bile kimse için başvuru yapılmaz
+    for key, fx in matched.items():
+        r.store.close_fixture(key, article.id)
+        await cancel_fixture(app, key)
+
+    link = f"<a href='{article.url}'>Duyuruyu aç</a>"
+    winners = 0
+    for user in r.store.all_users():
+        result = news.match_person(user.profile, names)
+        applied = [a for k in matched for a in r.store.applications_for(k)
+                   if a["chat_id"] == user.chat_id and a["status"] in (st.SENT, st.WON, st.LOST)]
+        if result == "exact":
+            winners += 1
+            for a in applied:
+                r.store.set_status(user.chat_id, candidates[a["fixture_key"]], st.WON)
+            await safe_send(app, user.chat_id,
+                            f"🎉 <b>Listede adın var!</b>\n\n📋 {esc(article.title)}\n\n"
+                            f"Listede <b>{esc(user.profile['name'])} {esc(user.profile['surname'])}</b> "
+                            f"adıyla bir kayıt var. Aynı isimde başka biri de olabilir; "
+                            f"duyurudaki talimatları mutlaka kontrol et.\n\n👉 {link}")
+        elif result == "similar":
+            await safe_send(app, user.chat_id,
+                            f"🤔 <b>Listede adına benzeyen bir kayıt var.</b>\n\n📋 {esc(article.title)}\n\n"
+                            f"Ad ve soyadın tutuyor ama ikinci ad farklı. Sen olabilirsin, kontrol et.\n\n👉 {link}")
+        elif applied:
+            for a in applied:
+                r.store.set_status(user.chat_id, candidates[a["fixture_key"]], st.LOST)
+            await safe_send(app, user.chat_id,
+                            f"😔 <b>Bu sefer listede yoksun.</b>\n\n📋 {esc(article.title)}\n\n"
+                            f"Bir sonraki maçta tekrar deneriz.\n👉 {link}")
+
+    matched_txt = ", ".join(esc(f["text"]) for f in matched.values()) or "⚠️ hiçbir maçla eşleştiremedim (başvurular kapatılmadı)"
+    for admin in r.config.admin_ids:
+        await safe_send(app, admin,
+                        f"📋 <b>Liste yayınlandı</b>: {esc(article.title)}\n"
+                        f"{len(names)} isim, kullanıcılardan {winners} kişi listede.\n"
+                        f"Kapatılan maç: {matched_txt}\n{link}")
+
+
+async def cancel_fixture(app: Application, key: str):
+    """Listesi çıkan maç için sıradaki/açık captcha ve onay bekleyen başvuruları kapatır."""
+    r: Runtime = app.bot_data["rt"]
+    for row in r.store.applications_for(key):
+        if row["status"] in (st.SENT, st.WON, st.LOST, st.SKIPPED):
+            continue
+        chat_id = row["chat_id"]
+        fx = {"branch": row["branch"], "id": row["fixture_id"], "text": row["fixture_text"]}
+        q = r.queues.get(chat_id)
+        if q:
+            r.queues[chat_id] = type(q)(x for x in q if site.fixture_key(x) != key)
+        p = r.pending.get(chat_id)
+        if p and site.fixture_key(p.fixture) == key:
+            finish_pending(app, chat_id)
+        r.store.set_status(chat_id, fx, st.CLOSED)
+        if row["status"] in (st.ASKED, st.QUEUED, st.CAPTCHA):
+            await safe_send(app, chat_id, f"📋 {fixture_line(fx)}\nListe yayınlandı, bu maç için başvuru kapandı.")
+            if p and site.fixture_key(p.fixture) == key:
+                await start_next(app, chat_id)
+
+
+@admin_only
+async def duyuru(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    articles = await run_news_check(context.application)
+    if articles is None:
+        await update.message.reply_html("⚠️ Duyurular çekilemedi.")
+        return
+    cursor = rt(context).store.get_kv("news_cursor") or rt(context).config.news_start_id
+    lines = [f"• {esc(a.title)}{' 📋' if a.is_winner_list else ''}" for a in articles] or ["Yeni duyuru yok."]
+    await update.message.reply_html("📰 <b>Duyurular</b>\n" + "\n".join(lines) + f"\n\nSon bilinen: /haber/{cursor}")
 
 
 # ==========================================================================
@@ -748,6 +864,9 @@ async def start_next(app: Application, chat_id: int):
         if not r.store.is_registered(chat_id):
             r.queues.pop(chat_id, None)
             return
+        if site.fixture_key(fx) in r.store.closed_keys():
+            r.store.set_status(chat_id, fx, st.CLOSED)
+            continue
         pending = Pending(fixture=fx)
         r.pending[chat_id] = pending          # hazırlanırken başka maç başlamasın
         try:
@@ -906,6 +1025,13 @@ async def on_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Geçildi")
         await q.edit_message_text(f"⏭ {fixture_line(fx)} — geçildi.", parse_mode=ParseMode.HTML)
         return
+    if key in r.store.closed_keys():
+        await q.answer("Bu maçın listesi yayınlandı, başvuru kapandı.", show_alert=True)
+        try:
+            await q.edit_message_reply_markup(None)
+        except Exception:
+            pass
+        return
     if row["status"] == st.SENT:
         await q.answer("Bu maça zaten başvurdun.", show_alert=True)
         return
@@ -997,6 +1123,7 @@ def build_app(config: Config, store: st.Storage | None = None) -> Application:
     app.add_handler(CommandHandler("davet", davet, filters=private))
     app.add_handler(CommandHandler("kullanicilar", kullanicilar, filters=private))
     app.add_handler(CommandHandler("kontrol", kontrol, filters=private, block=False))
+    app.add_handler(CommandHandler("duyuru", duyuru, filters=private, block=False))
     # Ağa çıkan işleyiciler block=False: bir kullanıcının gönderimi diğerlerini bekletmesin
     app.add_handler(MessageHandler(text & private, on_captcha_text, block=False))
     app.add_handler(CallbackQueryHandler(on_settings, pattern=r"^set:"))
@@ -1006,4 +1133,5 @@ def build_app(config: Config, store: st.Storage | None = None) -> Application:
     app.add_error_handler(on_error)
 
     app.job_queue.run_repeating(check_job, interval=config.check_interval, first=10, name="check")
+    app.job_queue.run_repeating(news_job, interval=config.news_interval, first=30, name="news")
     return app

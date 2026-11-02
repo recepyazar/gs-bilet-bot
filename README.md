@@ -30,6 +30,20 @@ Captcha için 10 dakika bekler. Süre dolarsa ya da gönderim başarısız olurs
 **🔁 Tekrar dene** düğmesi gelir. Aynı anda birden çok maç açılırsa sırayla,
 birer birer sorar.
 
+**Liste yayınlanınca.** Kulüp, hak kazananları galatasaray.org'da
+"<Rakip> maçı gazi ve engelli taraftar bilet listesi" başlıklı bir duyuruyla
+ad soyad olarak açıklıyor. Bot 5 dakikada bir yeni duyuru var mı bakar ve:
+
+- Adı listede olan her kullanıcıya 🎉 **"Listede adın var"** der
+  (formu bot dışında doldurmuş olsa bile)
+- Bot üzerinden başvurup listede olmayana 😔 **"Bu sefer listede yoksun"** der
+- İkinci ad farkı gibi yakın eşleşmelerde 🤔 **"kontrol et"** der
+- O maçı **kapatır**: form açık kalsa bile artık kimse için başvuru yapılmaz,
+  bekleyen captcha ve onay düğmeleri iptal olur
+
+Listede sadece ad soyad olduğu için aynı isimde biri de çıkabilir; bot bu
+yüzden "kazandın" demez, duyuruyu kontrol etmeni ister.
+
 | Komut | |
 |---|---|
 | `/ayarlar` | Mod, branşlar (dokunarak aç/kapat), duraklat/devam |
@@ -42,7 +56,7 @@ birer birer sorar.
 
 **Yönetici:** `/davet [adet]` tek kullanımlık davet linki üretir
 (`t.me/<bot>?start=<kod>`). `/kullanicilar` kullanıcı listesini gösterir
-(kişisel veri yok). `/kontrol` maçları hemen kontrol eder. Bot her
+(kişisel veri yok). `/kontrol` maçları, `/duyuru` duyuruları hemen kontrol eder. Bot her
 açılışta yöneticiye 🟢, düzgün kapanışta 🔴 mesajı atar. Ani çökmede mesaj
 gelmez; o durumda `/durum`'a cevap gelmemesinden anlarsın.
 
@@ -90,6 +104,8 @@ açmasına gerek yok.
 |---|---|---|
 | `CHECK_INTERVAL` | `120` | Maç kontrol aralığı (sn) |
 | `CAPTCHA_WAIT` | `600` | Captcha bekleme süresi (sn) |
+| `NEWS_INTERVAL` | `300` | Duyuru kontrol aralığı (sn) |
+| `NEWS_START_ID` | `61258` | İlk çalıştırmada duyuru zincirinin başladığı haber no |
 | `DB_PATH` | `data/gsbot.db` | SQLite dosyası |
 
 ### 4. Bot çökerse haber al (isteğe bağlı)
@@ -125,10 +141,16 @@ oturumuyla hazırlanır (anti-forgery token + captcha oturuma bağlıdır).
 gsbot/
   site.py        galatasaray.org istemcisi (maçlar, form, captcha, sonuç)
   storage.py     SQLite: kullanıcılar (şifreli profil), davetler, başvurular
+  news.py        duyuru zinciri, liste ayrıştırma, isim/maç eşleştirme
   bot.py         Telegram: kayıt sohbeti, ayarlar, kontrol döngüsü, captcha akışı
   validators.py  TC/tarih/telefon/branş doğrulama, maskeleme
   config.py      .env okuma
 ```
+
+**Duyurular** `/haber/<numara>` adresinde. Her duyurunun altındaki
+"SONRAKİ HABER" linki aynı kategorideki (RAMS Park) bir sonraki duyuruya
+gider; bot son bilinen duyurudan bu zinciri takip eder, yani kontrol başına
+tek istek atar. Listedeki isimler hiçbir yere kaydedilmez.
 
 Bot yeniden başlarsa bellekteki captcha oturumları kaybolur. O maçlar,
 hâlâ açıksa, bir sonraki kontrolde yeniden ele alınır.

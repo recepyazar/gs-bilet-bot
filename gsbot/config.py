@@ -27,6 +27,8 @@ class Config:
     check_interval: int = 120        # saniye
     captcha_wait: int = 600          # saniye
     healthcheck_url: str = ""         # healthchecks.io ping adresi (isteğe bağlı)
+    news_interval: int = 300          # duyuru kontrol aralığı (saniye)
+    news_start_id: int = 61258        # ilk çalıştırmada duyuru zincirinin başlayacağı haber no
 
     @classmethod
     def from_env(cls, dotenv: str | None = ".env") -> "Config":
@@ -49,4 +51,6 @@ class Config:
             check_interval=int(os.environ.get("CHECK_INTERVAL", "120")),
             captcha_wait=int(os.environ.get("CAPTCHA_WAIT", "600")),
             healthcheck_url=os.environ.get("HEALTHCHECK_URL", "").strip(),
+            news_interval=int(os.environ.get("NEWS_INTERVAL", "300")),
+            news_start_id=int(os.environ.get("NEWS_START_ID", "61258")),
         )

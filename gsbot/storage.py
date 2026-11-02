@@ -30,6 +30,9 @@ SENT = "gonderildi"
 FAILED = "hata"
 SKIPPED = "atlandi"
 EXPIRED = "zaman_asimi"
+CLOSED = "liste_cikti"   # liste yayınlandı, başvurmadan kapandı
+WON = "listede"          # gönderildi ve adı listede
+LOST = "listede_yok"     # gönderildi ama adı listede yok
 
 RETRYABLE = (ASKED, FAILED, EXPIRED, SKIPPED)
 
@@ -50,6 +53,21 @@ CREATE TABLE IF NOT EXISTS invites (
     created_at  INTEGER NOT NULL,
     used_by     INTEGER,
     used_at     INTEGER
+);
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS news (
+    id           INTEGER PRIMARY KEY,
+    title        TEXT    NOT NULL,
+    is_list      INTEGER NOT NULL,
+    processed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS closed_fixtures (
+    fixture_key TEXT PRIMARY KEY,
+    news_id     INTEGER NOT NULL,
+    closed_at   INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS applications (
     chat_id      INTEGER NOT NULL,
@@ -226,6 +244,47 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def applications_for(self, key: str) -> list[dict]:
+        rows = self.db.execute("SELECT * FROM applications WHERE fixture_key=?", (key,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def known_fixtures(self) -> list[dict]:
+        """Başvuru tablosunda geçen (bildirilmiş) tüm karşılaşmalar."""
+        rows = self.db.execute(
+            "SELECT DISTINCT branch, fixture_id, fixture_text FROM applications"
+        ).fetchall()
+        return [{"branch": r["branch"], "id": r["fixture_id"], "text": r["fixture_text"]} for r in rows]
+
+    def all_users(self) -> list[User]:
+        return [self._user(r) for r in self.db.execute("SELECT * FROM users").fetchall()]
+
+    # ------------------------------------------------------------- duyurular
+
+    def get_kv(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_kv(self, key: str, value: str):
+        self.db.execute("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (key, value))
+        self.db.commit()
+
+    def news_processed(self, news_id: int) -> bool:
+        return self.db.execute("SELECT 1 FROM news WHERE id=?", (news_id,)).fetchone() is not None
+
+    def mark_news(self, news_id: int, title: str, is_list: bool):
+        self.db.execute("INSERT OR IGNORE INTO news (id, title, is_list, processed_at) VALUES (?, ?, ?, ?)",
+                        (news_id, title, int(is_list), int(time.time())))
+        self.db.commit()
+
+    def close_fixture(self, key: str, news_id: int):
+        self.db.execute("INSERT OR IGNORE INTO closed_fixtures (fixture_key, news_id, closed_at) VALUES (?, ?, ?)",
+                        (key, news_id, int(time.time())))
+        self.db.commit()
+
+    def closed_keys(self) -> set[str]:
+        return {r["fixture_key"] for r in self.db.execute("SELECT fixture_key FROM closed_fixtures").fetchall()}
+
     def reset_inflight(self) -> int:
         """Bot yeniden başlarken yarım kalan (sırada/captcha) başvuruları siler.
 
@@ -238,8 +297,12 @@ class Storage:
 
 
 def plan_notifications(users: list[User], fixtures: list[dict],
-                       done: set[tuple[int, str]]) -> list[tuple[User, dict]]:
-    """Hangi kullanıcıya hangi karşılaşmanın bildirileceğini hesaplar."""
+                       done: set[tuple[int, str]], closed: set[str] = frozenset()) -> list[tuple[User, dict]]:
+    """Hangi kullanıcıya hangi karşılaşmanın bildirileceğini hesaplar.
+
+    Listesi yayınlanmış (closed) maçlar form açık olsa bile atlanır.
+    """
+    fixtures = [f for f in fixtures if f"{f['branch']}:{f['id']}" not in closed]
     out = []
     for user in users:
         if not user.active:
