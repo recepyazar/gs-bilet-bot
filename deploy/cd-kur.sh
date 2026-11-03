@@ -19,8 +19,8 @@ mkdir -p data && chown -R 1000:1000 data
 if [ ! -d .git ]; then
   echo "==> $DIR git deposuna çevriliyor"
   git init -q
-  git remote add origin "$REPO"
 fi
+git remote get-url origin >/dev/null 2>&1 && git remote set-url origin "$REPO" || git remote add origin "$REPO"
 git fetch -q origin main
 git reset -q --hard origin/main
 echo "==> Kod: $(git log -1 --format='%h %s')"
