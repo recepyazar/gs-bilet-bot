@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Yereldeki kodu sunucuya kopyalar ve botu yeniden başlatır.
+# ACİL DURUM / DENEME: yereldeki (commit'lenmemiş olabilir) kodu sunucuya kopyalar.
+# Normalde gerek yok: git push yeterli, sunucu 5 dk içinde kendini günceller
+# (deploy/otomatik-guncelle.sh). Bunu kullanırsan bir sonraki push üzerine yazar.
 #   deploy/guncelle.sh            (varsayılan: root@194.62.52.208)
 #   deploy/guncelle.sh root@<IP>
 # .env ve data/ (veritabanı) sunucuda kalır, üzerine yazılmaz.

@@ -108,6 +108,24 @@ açmasına gerek yok.
 | `NEWS_START_ID` | `61258` | İlk çalıştırmada duyuru zincirinin başladığı haber no |
 | `DB_PATH` | `data/gsbot.db` | SQLite dosyası |
 
+### Otomatik güncelleme (CD)
+
+Sunucu her 5 dakikada GitHub'daki `main` dalına bakar (`gsbot-deploy.timer`).
+Yeni commit varsa:
+
+1. Testleri yeni kodla Docker içinde koşar (`docker build --target test`).
+2. **Geçerse** kodu günceller, botu yeniden kurar, Telegram'a 🚀 yazar.
+3. **Kalırsa** hiçbir şeye dokunmaz, eski sürüm çalışmaya devam eder;
+   Telegram'a ❌ ve hangi testin kaldığını yazar.
+
+Yani `git push` yeterli. Kurulum (bir kez):
+```bash
+ssh root@<IP> 'bash -s' < deploy/cd-kur.sh
+```
+Log: `journalctl -u gsbot-deploy -f`. Hemen güncellemek için:
+`systemctl start gsbot-deploy`. `deploy/guncelle.sh` sadece commit'lemeden
+denemek içindir.
+
 ### 4. Bot çökerse haber al (isteğe bağlı)
 
 Bot kapalıyken `/durum`'a cevap veremez. Bunu dışarıdan izlemek için:
