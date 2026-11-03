@@ -231,3 +231,9 @@ async def test_healthcheck_ping(monkeypatch):
         raise ConnectionError
     monkeypatch.setattr(bot.requests, "get", boom)
     await bot.ping_healthcheck("https://hc-ping.com/abc")   # çökmemeli
+
+
+def test_admin_status_shows_version(app, monkeypatch):
+    monkeypatch.setattr(bot, "bot_version", lambda: "abc1234 deneme")
+    assert "Sürüm: abc1234 deneme" in bot.status_text(app.bot_data["rt"], 99)
+    assert "Sürüm" not in bot.status_text(app.bot_data["rt"], 1)

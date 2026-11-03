@@ -65,6 +65,7 @@ echo "==> Testler geçti ($PASSED)"
 git reset -q --hard "$REMOTE"
 rm -f .deploy-failed
 mkdir -p data && chown 1000:1000 data
+git log -1 --format='%h %s (%cd)' --date=format:'%d.%m.%Y %H:%M' > gsbot/VERSION
 
 if ! docker compose up -d --build >/dev/null 2>&1; then
   notify "⚠️ Testler geçti ama bot yeniden kurulamadı: $SHORT $SUBJECT

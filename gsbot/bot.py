@@ -547,6 +547,15 @@ def ago(seconds: float) -> str:
     return f"{seconds // 86400} gün {seconds % 86400 // 3600} sa"
 
 
+def bot_version() -> str:
+    """CD betiğinin build öncesi yazdığı sürüm (commit kısa hash + başlık)."""
+    try:
+        from pathlib import Path
+        return (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip() or "bilinmiyor"
+    except OSError:
+        return "bilinmiyor (yerel)"
+
+
 def status_text(r: Runtime, chat_id: int) -> str:
     now = time.time()
     if r.last_check_at is None:
@@ -579,7 +588,8 @@ def status_text(r: Runtime, chat_id: int) -> str:
             f"\n<b>Yönetici</b>\nAçık kalma süresi: {ago(now - r.started_at)}\n"
             f"Kullanıcı: {len(users)} ({active} aktif)\n"
             f"Bekleyen captcha: {len(r.pending)}\n"
-            f"Kontrol aralığı: {r.config.check_interval} sn"
+            f"Kontrol aralığı: {r.config.check_interval} sn\n"
+            f"Sürüm: {esc(bot_version())}"
         )
     return "\n".join(lines)
 
