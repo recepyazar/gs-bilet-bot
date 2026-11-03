@@ -13,6 +13,9 @@ DIR="${GSBOT_DIR:-/opt/gs-bilet-bot}"
 command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git >/dev/null; }
 
 cd "$DIR"
+# rsync ile kopyalanan dosyalar yerel kullanıcının UID'siyle gelir; git (root) buna itiraz eder
+chown -R root:root "$DIR"
+mkdir -p data && chown -R 1000:1000 data
 if [ ! -d .git ]; then
   echo "==> $DIR git deposuna çevriliyor"
   git init -q
